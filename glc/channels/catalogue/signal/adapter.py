@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from glc.channels.base import ChannelAdapter
@@ -21,6 +22,9 @@ from glc.channels.envelope import ChannelMessage, ChannelReply
 from glc.security.allowlists import allowed
 from glc.security.pairing import get_pairing_store
 from glc.security.trust_level import classify
+from glc.security.pairing import get_pairing_store
+from glc.security.trust_level import classify
+from glc.channels.catalogue.signal.schemas import SendParams, SignalSendRequest
 
 
 class Adapter(ChannelAdapter):
@@ -100,9 +104,18 @@ class Adapter(ChannelAdapter):
             group_id=reply.thread_id if reply.thread_id else None,
         )
         request = SignalSendRequest(id=uuid.uuid4().hex, params=params)
+            group_id=reply.thread_id if reply.thread_id else None
+        )
+
+        request = SignalSendRequest(
+            id=uuid.uuid4().hex,
+            params=params
+        )
+
         payload = request.model_dump(by_alias=True, exclude_none=True)
 
         mock = self.config.get("mock")
         if mock is not None:
             return await mock.send(payload)
+
         return payload
