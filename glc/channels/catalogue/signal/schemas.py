@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
+
 class GroupInfo(BaseModel):
     """Parses the group details from an incoming message."""
     model_config = ConfigDict(extra="ignore")
@@ -41,9 +42,6 @@ class SignalReceiveNotification(BaseModel):
 class SendParams(BaseModel):
     """Parses the JSON-RPC params for a send request."""
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
-class SendParams(BaseModel):
-    """Parses the JSON-RPC params for a send request."""
-    model_config = ConfigDict(extra="ignore")
     message: str
     recipient: str | None = None
     group_id: str | None = Field(default=None, alias="groupId")
