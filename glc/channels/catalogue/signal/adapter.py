@@ -15,13 +15,14 @@ Required env vars: SIGNAL_CLI_PATH, SIGNAL_ACCOUNT_NUMBER
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from glc.channels.base import ChannelAdapter
 from glc.channels.catalogue.signal.schemas import (
+    DataMessage,
     SendParams,
+    SignalEnvelope,
     SignalReceiveNotification,
     SignalSendRequest,
 )
@@ -29,19 +30,22 @@ from glc.channels.envelope import ChannelMessage, ChannelReply
 from glc.security.allowlists import allowed
 from glc.security.pairing import get_pairing_store
 from glc.security.trust_level import classify
-from glc.security.pairing import get_pairing_store
-from glc.security.trust_level import classify
-from glc.channels.catalogue.signal.schemas import (
-    SendParams,
-    SignalReceiveNotification,
-    SignalSendRequest,
-)
 
 
 class Adapter(ChannelAdapter):
+    """Translates between signal-cli JSON-RPC wire format and GLC envelopes."""
+
     name = "signal"
 
     async def on_message(self, raw: Any) -> ChannelMessage | None:
+        # Reject non-dict payloads (e.g. bare strings from broken transports).
+        if not isinstance(raw, dict):
+            return None
+
+        # Only process "receive" notifications; ignore keepalives / responses.
+        if raw.get("method") != "receive":
+            return None
+
         # signal-cli can drop the JSON-RPC socket; the mock signals this via
         # pop_disconnect(). Acknowledge the reconnect and keep processing the
         # event instead of raising.
@@ -57,7 +61,12 @@ class Adapter(ChannelAdapter):
 
         channel_user_id = envelope.source
         data_message = envelope.data_message
-        text = data_message.message if data_message else None
+
+        # Drop envelopes without a data message (e.g. typing indicators, receipts).
+        if data_message is None:
+            return None
+
+        text = (data_message.message or "").strip() or None
 
         group_id: str | None = None
         if data_message and data_message.group_info:
@@ -97,7 +106,7 @@ class Adapter(ChannelAdapter):
         )
 
     @staticmethod
-    def _arrived_at(envelope: Any, data_message: Any) -> datetime:
+    def _arrived_at(envelope: SignalEnvelope, data_message: DataMessage | None) -> datetime:
         # signal-cli timestamps are epoch milliseconds.
         ts_ms = None
         if data_message is not None and data_message.timestamp is not None:
@@ -105,18 +114,8 @@ class Adapter(ChannelAdapter):
         elif envelope is not None and envelope.timestamp is not None:
             ts_ms = envelope.timestamp
         if ts_ms is None:
-            return datetime.now(timezone.utc)
-        return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
-
-    async def send(self, reply: ChannelReply) -> Any:
-        params = SendParams(
-            message=reply.text or "",
-            recipient=reply.channel_user_id if not reply.thread_id else None,
-            group_id=reply.thread_id if reply.thread_id else None,
-        )
-        request = SignalSendRequest(id=uuid.uuid4().hex, params=params)
-            group_id=reply.thread_id if reply.thread_id else None
-        )
+            return datetime.now(UTC)
+        return datetime.fromtimestamp(ts_ms / 1000, tz=UTC)
 
     async def send(self, reply: ChannelReply) -> Any:
         # Guard: nothing to send
@@ -127,20 +126,13 @@ class Adapter(ChannelAdapter):
         if not reply.thread_id and not reply.channel_user_id:
             raise ValueError("send: DM reply requires a non-empty channel_user_id")
 
-        # Build params dict using wire-format alias keys ("groupId", not "group_id"),
-        # because SendParams uses alias= without populate_by_name=True — passing
-        # by Python name would be treated as extra and silently dropped.
         params_dict: dict[str, Any] = {"message": reply.text or ""}
         if reply.thread_id:
             params_dict["groupId"] = reply.thread_id
         else:
             params_dict["recipient"] = reply.channel_user_id
         params = SendParams.model_validate(params_dict)
-
-        request = SignalSendRequest(
-            id=uuid.uuid4().hex,
-            params=params,
-        )
+        request = SignalSendRequest(id=uuid.uuid4().hex, params=params)
 
         payload = request.model_dump(by_alias=True, exclude_none=True)
 
